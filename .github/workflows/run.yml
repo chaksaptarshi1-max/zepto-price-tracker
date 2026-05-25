@@ -19,8 +19,8 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install requests
-        run: pip install requests
+      - name: Install packages
+        run: pip install requests beautifulsoup4
 
       - name: Run script
         env:
