@@ -13,13 +13,32 @@ headers = {
 
 response = requests.get(URL, headers=headers)
 
-message = f"""
-✅ Zepto page checked
+soup = BeautifulSoup(response.text, "html.parser")
 
-Status Code: {response.status_code}
+links = soup.find_all("a")
 
-Page Length: {len(response.text)}
-"""
+message = "🛒 PRODUCTS FOUND\n\n"
+
+count = 0
+
+for link in links:
+
+    href = link.get("href")
+
+    text = link.get_text(strip=True)
+
+    if href and text:
+
+        if "/pn/" in href:
+
+            full_link = "https://www.zepto.com" + href
+
+            message += f"{text}\n{full_link}\n\n"
+
+            count += 1
+
+    if count >= 5:
+        break
 
 telegram_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
