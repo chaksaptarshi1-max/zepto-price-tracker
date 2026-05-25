@@ -26,7 +26,6 @@ new_prices = {}
 
 alerts = []
 
-# OPEN PAGE
 with sync_playwright() as p:
 
     browser = p.chromium.launch(headless=True)
@@ -35,6 +34,121 @@ with sync_playwright() as p:
 
     page.goto(URL, timeout=60000)
 
+    page.wait_for_timeout(15000)
+
+    # GET ALL LINKS
+    product_elements = page.locator("a").all()
+
+    for item in product_elements:
+
+        try:
+
+            href = item.get_attribute("href")
+
+            if not href:
+                continue
+
+            if "/pn/" not in href:
+                continue
+
+            text = item.inner_text()
+
+            if not text:
+                continue
+
+            prices = re.findall(r'₹\s?(\d+)', text)
+
+            if len(prices) < 2:
+                continue
+
+            prices = [int(x) for x in prices]
+
+            current_price = min(prices)
+
+            if current_price <= 0:
+                continue
+
+            full_link = "https://www.zepto.com" + href
+
+            product_name = text.split("₹")[0].strip()
+
+            product_id = href
+
+            new_prices[product_id] = current_price
+
+            # COMPARE OLD PRICE
+            if product_id in old_prices:
+
+                old_price = old_prices[product_id]
+
+                if old_price <= 0:
+                    continue
+
+                drop = (
+                    (old_price - current_price)
+                    / old_price
+                ) * 100
+
+                if drop >= MIN_DROP:
+
+                    msg = f"""
+🔥 90%+ PRICE DROP
+
+📦 {product_name}
+
+💰 ₹{old_price} → ₹{current_price}
+
+📉 Drop: {drop:.1f}%
+
+🔗 {full_link}
+"""
+
+                    alerts.append(msg)
+
+        except:
+            continue
+
+    browser.close()
+
+# SAVE NEW PRICES
+with open(PRICE_FILE, "w") as f:
+    json.dump(new_prices, f)
+
+telegram_url = (
+    f"https://api.telegram.org/bot"
+    f"{BOT_TOKEN}/sendMessage"
+)
+
+# SEND RESULTS
+if len(alerts) == 0:
+
+    msg = (
+        f"✅ Scan Complete\n\n"
+        f"Products scanned: {len(new_prices)}\n"
+        f"No 90%+ drops found."
+    )
+
+    requests.post(
+        telegram_url,
+        data={
+            "chat_id": CHAT_ID,
+            "text": msg
+        }
+    )
+
+else:
+
+    for alert in alerts[:20]:
+
+        requests.post(
+            telegram_url,
+            data={
+                "chat_id": CHAT_ID,
+                "text": alert
+            }
+        )
+
+print("DONE")
     page.wait_for_timeout(10000)
 
     html = page.content()
