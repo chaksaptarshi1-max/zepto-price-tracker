@@ -19,10 +19,10 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install packages
+      - name: Install dependencies
         run: |
           pip install requests playwright
-          playwright install chromium
+          python -m playwright install --with-deps chromium
 
       - name: Run script
         env:
