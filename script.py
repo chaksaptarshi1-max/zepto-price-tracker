@@ -89,7 +89,7 @@ for link in links:
 
                 messages.append(msg)
 
-            elif drop_percent >= 90:
+            elif drop_percent >= 70:
 
                 msg = f"""
 🔥 90%+ PRICE DROP
