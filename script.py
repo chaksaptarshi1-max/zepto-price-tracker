@@ -1,45 +1,25 @@
 import os
 import requests
+from bs4 import BeautifulSoup
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-# SAMPLE PRODUCTS
-products = [
-    {
-        "name": "Sample Product 1",
-        "old_price": 1000,
-        "current_price": 50
-    },
-    {
-        "name": "Sample Product 2",
-        "old_price": 500,
-        "current_price": 300
-    }
-]
+URL = "https://www.zepto.com/search?query=electronics"
 
-for product in products:
-    old_price = product["old_price"]
-    current_price = product["current_price"]
+headers = {
+    "User-Agent": "Mozilla/5.0"
+}
 
-    drop_percent = ((old_price - current_price) / old_price) * 100
+response = requests.get(URL, headers=headers)
 
-    if drop_percent >= 90:
-        message = f"""
-🔥 PRICE DROP ALERT
+print(response.text[:500])
 
-{product['name']}
+message = "Zepto tracker is running ✅"
 
-₹{old_price} → ₹{current_price}
+telegram_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
-Drop: {drop_percent:.1f}%
-"""
-
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-
-        requests.post(url, data={
-            "chat_id": CHAT_ID,
-            "text": message
-        })
-
-        print("Alert sent!")
+requests.post(telegram_url, data={
+    "chat_id": CHAT_ID,
+    "text": message
+})
