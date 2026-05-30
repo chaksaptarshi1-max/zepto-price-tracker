@@ -12,286 +12,228 @@ const PRICE_FILE = "prices.json";
 
 const MIN_DROP = 90;
 
-// LOAD OLD PRICES
 function loadPrices() {
-
   if (!fs.existsSync(PRICE_FILE)) {
     return {};
   }
 
   try {
-
     return JSON.parse(
       fs.readFileSync(PRICE_FILE, "utf8")
     );
-
   } catch {
-
     return {};
   }
 }
 
-// SAVE PRICES
 function savePrices(data) {
-
   fs.writeFileSync(
     PRICE_FILE,
     JSON.stringify(data, null, 2)
   );
 }
 
-// EXTRACT ₹ PRICES
-function extractPrices(text) {
-
-  return [...text.matchAll(/₹\s*([0-9][0-9,]*)/g)]
-
-    .map((m) =>
-      parseInt(
-        m[1].replace(/,/g, ""),
-        10
-      )
-    )
-
-    .filter((n) =>
-      Number.isFinite(n) && n > 0
-    );
-}
-
-// TELEGRAM
 async function sendTelegram(message) {
+  if (!BOT_TOKEN || !CHAT_ID) {
+    console.log(message);
+    return;
+  }
 
   await axios.post(
     `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`,
     {
       chat_id: CHAT_ID,
       text: message,
+      disable_web_page_preview: true,
     }
   );
 }
 
 (async () => {
-
   const oldPrices = loadPrices();
-
   const newPrices = {};
-
   const alerts = [];
 
   const browser = await chromium.launch({
-    headless: true
+    headless: true,
   });
 
   try {
-
-    // COOKIE LOGIN
     const context =
       await browser.newContext({
+        viewport: {
+          width: 1440,
+          height: 2200,
+        },
+      });
 
-      storageState: {
-
-        cookies: [
-
-          {
-            name: "accessToken",
-            value: "eyJhbGciOiJIUzUxMiJ9.eyJ2ZXJzaW9uIjoxLCJzdWIiOiI3OTJjMzYwNC02NmIxLTQ1ZjctOGExZi1mZWUyZGY2MGI2YWMiLCJpYXQiOjE3Nzk3MDc0MTksImV4cCI6MTc3OTcxMTAxOX0.pwLXVhTLCOIVYxVg2G7RKNiaM39_Btx_0UeXA8DqIACqddpW8SNUmDUoX3-6Z-HzwgeSY3Tw0RrTnGUEx-FdcQ",
-            domain: ".zepto.com",
-            path: "/"
-          },
-
-          {
-            name: "refreshToken",
-            value: "cf8bd0c5-7525-4c71-8fc4-56076a3d6204",
-            domain: ".zepto.com",
-            path: "/"
-          },
-
-          {
-            name: "marketplace",
-            value: "SUPER_SAVER",
-            domain: "www.zepto.com",
-            path: "/"
-          }
-
-        ],
-
-        origins: []
-
-      }
-
-    });
-
-    const page = await context.newPage({
-
-      viewport: {
-        width: 1440,
-        height: 2200
-      }
-
-    });
+    const page = await context.newPage();
 
     await page.goto(URL, {
-
-      waitUntil: "domcontentloaded",
-
+      waitUntil: "networkidle",
       timeout: 60000,
-
     });
 
-    await page.waitForTimeout(12000);
+    await page.waitForTimeout(5000);
 
-    // SCROLL
-    for (let i = 0; i < 5; i++) {
-
-      await page.mouse.wheel(0, 3000);
+    // Scroll to load products
+    for (let i = 0; i < 10; i++) {
+      await page.evaluate(() =>
+        window.scrollBy(0, 3000)
+      );
 
       await page.waitForTimeout(1500);
     }
 
-    // GET PRODUCTS
-    const items =
-      await page.locator("a[href]")
-      .evaluateAll((els) =>
+    const products = await page.evaluate(() => {
+      const results = [];
 
-        els.map((el) => ({
-          href:
-            el.getAttribute("href") || "",
-
-          text:
-            (el.innerText || "").trim(),
-        }))
-
+      const cards = Array.from(
+        document.querySelectorAll("*")
       );
 
-    for (const item of items) {
-
-      try {
+      for (const card of cards) {
+        const text =
+          (card.innerText || "").trim();
 
         if (
-          !item.href.includes("/pn/")
+          !text ||
+          !text.includes("₹") ||
+          !text.includes("ADD")
         ) {
           continue;
         }
 
-        if (!item.text) {
-          continue;
-        }
+        const prices = [
+          ...text.matchAll(
+            /₹\s*([0-9][0-9,]*)/g
+          ),
+        ]
+          .map((m) =>
+            parseInt(
+              m[1].replace(/,/g, ""),
+              10
+            )
+          )
+          .filter(
+            (n) =>
+              Number.isFinite(n) && n > 0
+          );
 
-        const prices =
-          extractPrices(item.text);
-
-        if (prices.length < 2) {
+        if (prices.length === 0) {
           continue;
         }
 
         const currentPrice =
           Math.min(...prices);
 
-        const productName =
-          item.text
+        const productName = text
           .split("₹")[0]
+          .replace(/\n+/g, " ")
           .trim()
-          .slice(0, 100)
+          .slice(0, 120);
 
-          || "Zepto Product";
+        let href = "";
 
-        const productId =
-          item.href;
+        const link =
+          card.closest("a") ||
+          card.querySelector("a");
 
-        const fullLink =
-          item.href.startsWith("http")
+        if (link) {
+          href =
+            link.getAttribute("href") || "";
+        }
 
-          ? item.href
+        results.push({
+          name: productName,
+          price: currentPrice,
+          href,
+        });
+      }
 
-          : `https://www.zepto.com${item.href}`;
+      return results;
+    });
 
-        newPrices[productId] =
-          currentPrice;
+    console.log(
+      `Found ${products.length} products`
+    );
 
-        // CHECK PRICE DROP
-        if (oldPrices[productId]) {
+    for (const item of products) {
+      const productId =
+        item.href ||
+        item.name.toLowerCase();
 
-          const oldPrice =
-            oldPrices[productId];
+      const currentPrice =
+        item.price;
 
-          if (oldPrice > 0) {
+      const fullLink =
+        item.href &&
+        !item.href.startsWith("http")
+          ? `https://www.zepto.com${item.href}`
+          : item.href;
 
-            const drop =
-              (
-                (oldPrice - currentPrice)
+      newPrices[productId] =
+        currentPrice;
 
-                / oldPrice
-              ) * 100;
+      if (
+        oldPrices[productId] &&
+        oldPrices[productId] > 0
+      ) {
+        const oldPrice =
+          oldPrices[productId];
 
-            if (drop >= MIN_DROP) {
+        const drop =
+          ((oldPrice - currentPrice) /
+            oldPrice) *
+          100;
 
-              alerts.push(
+        if (
+          currentPrice < oldPrice &&
+          drop >= MIN_DROP
+        ) {
+          alerts.push(
+`🔥 ${MIN_DROP}%+ PRICE DROP
 
-`🔥 90%+ PRICE DROP
-
-📦 ${productName}
+📦 ${item.name}
 
 💰 ₹${oldPrice} → ₹${currentPrice}
 
 📉 Drop: ${drop.toFixed(1)}%
 
-🔗 ${fullLink}`
-
-              );
-            }
-          }
+🔗 ${fullLink || "N/A"}`
+          );
         }
-
-      } catch {
-
-        continue;
       }
     }
-
   } finally {
-
     await browser.close();
   }
 
-  // SAVE
   savePrices(newPrices);
 
-  // SEND TELEGRAM
   if (alerts.length === 0) {
-
     await sendTelegram(
-
 `✅ Scan Complete
 
 Products scanned: ${Object.keys(newPrices).length}
 
-No 90%+ drops found.`
-
+No ${MIN_DROP}%+ drops found.`
     );
-
   } else {
-
-    for (
-      const alert of alerts.slice(0, 20)
-    ) {
-
+    for (const alert of alerts.slice(0, 20)) {
       await sendTelegram(alert);
     }
   }
-
 })().catch(async (err) => {
+  console.error(err);
 
   try {
-
     await sendTelegram(
-
 `❌ Script failed
 
 ${err.message}`
-
     );
-
   } catch {}
 
   process.exit(1);
-
 });
