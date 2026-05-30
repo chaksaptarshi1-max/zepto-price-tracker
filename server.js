@@ -1,6 +1,6 @@
 const fs = require("fs");
-const { chromium } = require("playwright");
 const axios = require("axios");
+const { chromium } = require("playwright");
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const CHAT_ID = process.env.CHAT_ID;
@@ -9,15 +9,11 @@ const URL =
   "https://www.zepto.com/search?query=electronics";
 
 const PRICE_FILE = "prices.json";
-
 const MIN_DROP = 90;
 
 function loadPrices() {
-  if (!fs.existsSync(PRICE_FILE)) {
-    return {};
-  }
-
   try {
+    if (!fs.existsSync(PRICE_FILE)) return {};
     return JSON.parse(
       fs.readFileSync(PRICE_FILE, "utf8")
     );
@@ -39,14 +35,21 @@ async function sendTelegram(message) {
     return;
   }
 
-  await axios.post(
-    `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`,
-    {
-      chat_id: CHAT_ID,
-      text: message,
-      disable_web_page_preview: true,
-    }
-  );
+  try {
+    await axios.post(
+      `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`,
+      {
+        chat_id: CHAT_ID,
+        text: message,
+        disable_web_page_preview: true,
+      }
+    );
+  } catch (err) {
+    console.error(
+      "Telegram Error:",
+      err.message
+    );
+  }
 }
 
 (async () => {
@@ -69,171 +72,190 @@ async function sendTelegram(message) {
 
     const page = await context.newPage();
 
+    console.log("Opening Zepto...");
+
     await page.goto(URL, {
       waitUntil: "networkidle",
-      timeout: 60000,
+      timeout: 90000,
     });
 
-    await page.waitForTimeout(5000);
+    await page.waitForTimeout(8000);
 
-    // Scroll to load products
-    for (let i = 0; i < 10; i++) {
-      await page.evaluate(() =>
-        window.scrollBy(0, 3000)
-      );
+    console.log(
+      "URL:",
+      page.url()
+    );
+
+    console.log(
+      "TITLE:",
+      await page.title()
+    );
+
+    await page.screenshot({
+      path: "debug.png",
+      fullPage: true,
+    });
+
+    fs.writeFileSync(
+      "debug.html",
+      await page.content()
+    );
+
+    for (let i = 0; i < 12; i++) {
+      await page.evaluate(() => {
+        window.scrollBy(0, 3000);
+      });
 
       await page.waitForTimeout(1500);
     }
 
-    const products = await page.evaluate(() => {
-      const results = [];
+    const products =
+      await page.evaluate(() => {
+        const seen = new Set();
+        const results = [];
 
-      const cards = Array.from(
-        document.querySelectorAll("*")
-      );
+        const elements =
+          document.querySelectorAll("*");
 
-      for (const card of cards) {
-        const text =
-          (card.innerText || "").trim();
+        for (const el of elements) {
+          const text =
+            (el.innerText || "").trim();
 
-        if (
-          !text ||
-          !text.includes("₹") ||
-          !text.includes("ADD")
-        ) {
-          continue;
-        }
+          if (
+            !text ||
+            !text.includes("₹") ||
+            !text.includes("ADD")
+          ) {
+            continue;
+          }
 
-        const prices = [
-          ...text.matchAll(
-            /₹\s*([0-9][0-9,]*)/g
-          ),
-        ]
-          .map((m) =>
-            parseInt(
-              m[1].replace(/,/g, ""),
-              10
+          const prices = [
+            ...text.matchAll(
+              /₹\s*([0-9][0-9,]*)/g
+            ),
+          ]
+            .map((m) =>
+              parseInt(
+                m[1].replace(/,/g, ""),
+                10
+              )
             )
-          )
-          .filter(
-            (n) =>
-              Number.isFinite(n) && n > 0
-          );
+            .filter(
+              (n) =>
+                Number.isFinite(n) &&
+                n > 0
+            );
 
-        if (prices.length === 0) {
-          continue;
+          if (!prices.length) {
+            continue;
+          }
+
+          const currentPrice =
+            Math.min(...prices);
+
+          const name = text
+            .split("₹")[0]
+            .replace(/\n+/g, " ")
+            .trim()
+            .slice(0, 120);
+
+          if (!name) continue;
+
+          if (seen.has(name))
+            continue;
+
+          seen.add(name);
+
+          results.push({
+            id: name,
+            name,
+            price: currentPrice,
+          });
         }
 
-        const currentPrice =
-          Math.min(...prices);
-
-        const productName = text
-          .split("₹")[0]
-          .replace(/\n+/g, " ")
-          .trim()
-          .slice(0, 120);
-
-        let href = "";
-
-        const link =
-          card.closest("a") ||
-          card.querySelector("a");
-
-        if (link) {
-          href =
-            link.getAttribute("href") || "";
-        }
-
-        results.push({
-          name: productName,
-          price: currentPrice,
-          href,
-        });
-      }
-
-      return results;
-    });
+        return results;
+      });
 
     console.log(
-      `Found ${products.length} products`
+      "Products found:",
+      products.length
     );
 
-    for (const item of products) {
-      const productId =
-        item.href ||
-        item.name.toLowerCase();
+    fs.writeFileSync(
+      "products.json",
+      JSON.stringify(
+        products,
+        null,
+        2
+      )
+    );
 
+    for (const product of products) {
+      const id = product.id;
       const currentPrice =
-        item.price;
+        product.price;
 
-      const fullLink =
-        item.href &&
-        !item.href.startsWith("http")
-          ? `https://www.zepto.com${item.href}`
-          : item.href;
-
-      newPrices[productId] =
+      newPrices[id] =
         currentPrice;
 
       if (
-        oldPrices[productId] &&
-        oldPrices[productId] > 0
+        oldPrices[id] &&
+        oldPrices[id] > 0
       ) {
         const oldPrice =
-          oldPrices[productId];
+          oldPrices[id];
 
         const drop =
-          ((oldPrice - currentPrice) /
+          ((oldPrice -
+            currentPrice) /
             oldPrice) *
           100;
 
         if (
-          currentPrice < oldPrice &&
+          currentPrice <
+            oldPrice &&
           drop >= MIN_DROP
         ) {
           alerts.push(
 `🔥 ${MIN_DROP}%+ PRICE DROP
 
-📦 ${item.name}
+📦 ${product.name}
 
 💰 ₹${oldPrice} → ₹${currentPrice}
 
-📉 Drop: ${drop.toFixed(1)}%
-
-🔗 ${fullLink || "N/A"}`
+📉 ${drop.toFixed(1)}%`
           );
         }
       }
     }
-  } finally {
-    await browser.close();
-  }
 
-  savePrices(newPrices);
+    savePrices(newPrices);
 
-  if (alerts.length === 0) {
-    await sendTelegram(
+    if (alerts.length) {
+      for (const msg of alerts.slice(
+        0,
+        20
+      )) {
+        await sendTelegram(msg);
+      }
+    } else {
+      await sendTelegram(
 `✅ Scan Complete
 
-Products scanned: ${Object.keys(newPrices).length}
+Products scanned: ${products.length}
 
 No ${MIN_DROP}%+ drops found.`
-    );
-  } else {
-    for (const alert of alerts.slice(0, 20)) {
-      await sendTelegram(alert);
+      );
     }
-  }
-})().catch(async (err) => {
-  console.error(err);
+  } catch (err) {
+    console.error(err);
 
-  try {
     await sendTelegram(
-`❌ Script failed
+`❌ Script Failed
 
 ${err.message}`
     );
-  } catch {}
-
-  process.exit(1);
-});
+  } finally {
+    await browser.close();
+  }
+})();
